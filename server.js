@@ -115,7 +115,9 @@ app.get('/coursefile/api/me', requireAuth, (req, res) => {
 // Subjects CRUD
 app.get('/coursefile/api/subjects', requireAuth, (req, res) => {
   const data = readJson(subjectsDataPath);
-  const list = data.byFacultyId[req.session.facultyid] || [];
+  const allSubjects = data.byFacultyId[req.session.facultyid] || [];
+  // Filter by current academic year
+  const list = allSubjects.filter(s => s.academicYear === req.session.academicYear);
   res.json({ subjects: list });
 });
 
@@ -127,6 +129,7 @@ app.post('/coursefile/api/subjects', requireAuth, (req, res) => {
   const data = readJson(subjectsDataPath);
   const subject = {
     id: uuidv4(),
+    academicYear: req.session.academicYear,
     yearSem,
     department,
     section,
@@ -177,13 +180,13 @@ app.delete('/coursefile/api/subjects/:id', requireAuth, (req, res) => {
   data.byFacultyId[req.session.facultyid] = next;
   writeJson(subjectsDataPath, data);
 
-  // Also delete uploaded files directory for this subject (current AY/Dept/Faculty)
+  // Also delete uploaded files directory for this subject (current AY/Dept/Faculty/Regulation/Subject/Branch)
   try {
     const year = req.session.academicYear;
     const dept = req.session.department;
     const facultyid = req.session.facultyid;
-    if (year && dept && facultyid && removed && removed.subjectCode) {
-      const dir = path.join(__dirname, 'uploads', year, dept, facultyid, removed.subjectCode);
+    if (year && dept && facultyid && removed && removed.subjectCode && removed.regulation && removed.department) {
+      const dir = path.join(__dirname, 'uploads', year, dept, facultyid, removed.regulation, removed.subjectCode, removed.department);
       if (fs.existsSync(dir)) {
         fs.rmSync(dir, { recursive: true, force: true });
       }
@@ -229,14 +232,14 @@ const upload = multer({
       if (!req.session || !req.session.academicYear) {
         return cb(new Error('Academic year not set'));
       }
-      const { subjectCode, section } = req.query;
-      if (!subjectCode || !section) {
-        return cb(new Error('subjectCode and section query params are required'));
+      const { subjectCode, branch, regulation } = req.query;
+      if (!subjectCode || !branch || !regulation) {
+        return cb(new Error('subjectCode, branch, and regulation query params are required'));
       }
       const year = req.session.academicYear;
       const dept = req.session.department;
       const facultyid = req.session.facultyid;
-      const baseDir = path.join(__dirname, 'uploads', year, dept, facultyid, subjectCode);
+      const baseDir = path.join(__dirname, 'uploads', year, dept, facultyid, regulation, subjectCode, branch);
       fs.mkdirSync(baseDir, { recursive: true });
       cb(null, baseDir);
     },
@@ -316,12 +319,12 @@ async function addCoverAndSave(tempFilePath, finalFilePath, title) {
 // Upload single pdf for a given section
 app.post('/coursefile/api/upload', requireAuth, upload.single('file'), async (req, res) => {
   try {
-    const { subjectCode, section } = req.query;
-    if (!subjectCode || !section) return res.status(400).json({ error: 'subjectCode and section are required' });
+    const { subjectCode, branch, regulation } = req.query;
+    if (!subjectCode || !branch || !regulation) return res.status(400).json({ error: 'subjectCode, branch, and regulation are required' });
     const year = req.session.academicYear;
     const dept = req.session.department;
     const facultyid = req.session.facultyid;
-    const dir = path.join(__dirname, 'uploads', year, dept, facultyid, subjectCode);
+    const dir = path.join(__dirname, 'uploads', year, dept, facultyid, regulation, subjectCode, branch);
     const finalName = `section-${section}.pdf`;
     const tmpPath = path.join(dir, req.file.filename);
     const finalPath = path.join(dir, finalName);
@@ -338,12 +341,12 @@ app.post('/coursefile/api/upload', requireAuth, upload.single('file'), async (re
 // Delete uploaded pdf for a given section
 app.delete('/coursefile/api/upload', requireAuth, async (req, res) => {
   try {
-    const { subjectCode, section } = req.query;
-    if (!subjectCode || !section) return res.status(400).json({ error: 'subjectCode and section are required' });
+    const { subjectCode, branch, regulation } = req.query;
+    if (!subjectCode || !branch || !regulation) return res.status(400).json({ error: 'subjectCode, branch, and regulation are required' });
     const year = req.session.academicYear;
     const dept = req.session.department;
     const facultyid = req.session.facultyid;
-    const dir = path.join(__dirname, 'uploads', year, dept, facultyid, subjectCode);
+    const dir = path.join(__dirname, 'uploads', year, dept, facultyid, regulation, subjectCode, branch);
     const filePath = path.join(dir, `section-${section}.pdf`);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
     fs.unlinkSync(filePath);
@@ -355,20 +358,20 @@ app.delete('/coursefile/api/upload', requireAuth, async (req, res) => {
 
 // List uploaded files for a subject
 app.get('/coursefile/api/uploads', requireAuth, (req, res) => {
-  const { subjectCode } = req.query;
-  if (!subjectCode) return res.status(400).json({ error: 'subjectCode is required' });
+  const { subjectCode, branch, regulation } = req.query;
+  if (!subjectCode || !branch || !regulation) return res.status(400).json({ error: 'subjectCode, branch, and regulation are required' });
   if (!req.session.academicYear) return res.status(400).json({ error: 'Academic year not set' });
   const year = req.session.academicYear;
   const dept = req.session.department;
   const facultyid = req.session.facultyid;
-  const dir = path.join(__dirname, 'uploads', year, dept, facultyid, subjectCode);
+  const dir = path.join(__dirname, 'uploads', year, dept, facultyid, regulation, subjectCode, branch);
   if (!fs.existsSync(dir)) return res.json({ files: [] });
   const files = fs
     .readdirSync(dir)
     .filter((f) => f.toLowerCase().endsWith('.pdf'))
     .map((name) => ({
       name,
-      url: `/coursefile/uploads/${encodeURIComponent(year)}/${encodeURIComponent(dept)}/${encodeURIComponent(facultyid)}/${encodeURIComponent(subjectCode)}/${encodeURIComponent(name)}`
+      url: `/coursefile/uploads/${encodeURIComponent(year)}/${encodeURIComponent(dept)}/${encodeURIComponent(facultyid)}/${encodeURIComponent(regulation)}/${encodeURIComponent(subjectCode)}/${encodeURIComponent(branch)}/${encodeURIComponent(name)}`
     }));
   res.json({ files });
 });
@@ -406,12 +409,12 @@ async function addCoverPageTo(outPdf, text) {
 // Merge all available section PDFs into one file with a title page
 app.get('/coursefile/api/merge', requireAuth, async (req, res) => {
   try {
-    const { subjectCode, subjectName } = req.query;
-    if (!subjectCode || !subjectName) return res.status(400).json({ error: 'subjectCode and subjectName are required' });
+    const { subjectCode, subjectName, branch, regulation } = req.query;
+    if (!subjectCode || !subjectName || !branch || !regulation) return res.status(400).json({ error: 'subjectCode, subjectName, branch, and regulation are required' });
     const year = req.session.academicYear;
     const dept = req.session.department;
     const facultyid = req.session.facultyid;
-    const dir = path.join(__dirname, 'uploads', year, dept, facultyid, subjectCode);
+    const dir = path.join(__dirname, 'uploads', year, dept, facultyid, regulation, subjectCode, branch);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
     const out = await PDFDocument.create();
